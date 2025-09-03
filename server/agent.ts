@@ -1,30 +1,28 @@
-// Import required modules from LangChain ecosystem
-import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai"; // For creating vector embeddings from text using Gemini
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai"; // Google's Gemini AI model
-import { AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages"; // Message types for conversations
+import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai"; 
+import { AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages"; 
 import {
-  ChatPromptTemplate, // For creating structured prompts with placeholders
-  MessagesPlaceholder, // Placeholder for dynamic message history
+  ChatPromptTemplate, 
+  MessagesPlaceholder,
 } from "@langchain/core/prompts";
-import { StateGraph } from "@langchain/langgraph"; // State-based workflow orchestration
-import { Annotation } from "@langchain/langgraph"; // Type annotations for state management
-import { tool } from "@langchain/core/tools"; // For creating custom tools/functions
-import { ToolNode } from "@langchain/langgraph/prebuilt"; // Pre-built node for executing tools
-import { MongoDBSaver } from "@langchain/langgraph-checkpoint-mongodb"; // For saving conversation state
-import { MongoDBAtlasVectorSearch } from "@langchain/mongodb"; // Vector search integration with MongoDB
-import { MongoClient } from "mongodb"; // MongoDB database client
-import { z } from "zod"; // Schema validation library
-import "dotenv/config"; // Load environment variables from .env file
+import { StateGraph } from "@langchain/langgraph"; 
+import { Annotation } from "@langchain/langgraph"; 
+import { tool } from "@langchain/core/tools"; 
+import { ToolNode } from "@langchain/langgraph/prebuilt"; 
+import { MongoDBSaver } from "@langchain/langgraph-checkpoint-mongodb";
+import { MongoDBAtlasVectorSearch } from "@langchain/mongodb";
+import { MongoClient } from "mongodb"; 
+import { z } from "zod";
+import "dotenv/config"; 
 
 
 async function retryWithBackoff<T>(
-  fn: () => Promise<T>, // The function to retry (generic type T for return value)
-  maxRetries = 3 // Maximum number of retry attempts (default 3)
+  fn: () => Promise<T>,
+  maxRetries = 3
 ): Promise<T> {
-  // Loop through retry attempts
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      return await fn(); // Try to execute the function
+      return await fn(); 
     } catch (error: any) {
       // Check if it's a rate limit error (HTTP 429) and we have retries left
       if (error.status === 429 && attempt < maxRetries) {
@@ -33,12 +31,12 @@ async function retryWithBackoff<T>(
         console.log(`Rate limit hit. Retrying in ${delay / 1000} seconds...`);
         // Wait for the calculated delay before retrying
         await new Promise((resolve) => setTimeout(resolve, delay));
-        continue; // Go to next iteration (retry)
+        continue; 
       }
-      throw error; // If not rate limit or out of retries, throw the error
+      throw error; 
     }
   }
-  throw new Error("Max retries exceeded"); // This should never be reached
+  throw new Error("Max retries exceeded");
 }
 
 export async function callAgent(
@@ -48,15 +46,14 @@ export async function callAgent(
 ) {
   try {
     // Database configuration
-    const dbName = "inventory_database"; // Name of the MongoDB database
-    const db = client.db(dbName); // Get database instance
-    const collection = db.collection("items"); // Get the 'items' collection
+    const dbName = "inventory_database";
+    const db = client.db(dbName); 
+    const collection = db.collection("items"); 
 
     // Define the state structure for the agent workflow
     const GraphState = Annotation.Root({
       messages: Annotation<BaseMessage[]>({
-        // Reducer function: how to combine old and new messages
-        reducer: (x, y) => x.concat(y), // Simply concatenate old messages (x) with new messages (y)
+        reducer: (x, y) => x.concat(y),
       }),
     });
 
@@ -177,99 +174,87 @@ export async function callAgent(
       }
     );
 
-    // Array of all available tools (just one in this case)
     const tools = [itemLookupTool];
-    // Create a tool execution node for the workflow
     const toolNode = new ToolNode<typeof GraphState.State>(tools);
 
-    // Initialize the AI model (Google's Gemini)
+  
     const model = new ChatGoogleGenerativeAI({
-      model: "gemini-1.5-flash", //  Use Gemini 1.5 Flash model
-      temperature: 0, // Deterministic responses (no randomness)
-      maxRetries: 0, // Disable built-in retries (we handle our own)
-      apiKey: process.env.GOOGLE_API_KEY, // Google API key from environment
-    }).bindTools(tools); // Bind our custom tools to the model
+      model: "gemini-1.5-flash", 
+      temperature: 0, 
+      maxRetries: 0,
+      apiKey: process.env.GOOGLE_API_KEY, 
+    }).bindTools(tools);
 
     // Decision function: determines next step in the workflow
     function shouldContinue(state: typeof GraphState.State) {
       const messages = state.messages; // Get all messages
-      const lastMessage = messages[messages.length - 1] as AIMessage; // Get the most recent message
+      const lastMessage = messages[messages.length - 1] as AIMessage; 
 
-      // If the AI wants to use tools, go to tools node; otherwise end
       if (lastMessage.tool_calls?.length) {
-        return "tools"; // Route to tool execution
+        return "tools"; 
       }
-      return "__end__"; // End the workflow
+      return "__end__"; 
     }
 
-    // Function that calls the AI model with retry logic
     async function callModel(state: typeof GraphState.State) {
       return retryWithBackoff(async () => {
-        // Wrap in retry logic
-        // Create a structured prompt template
         const prompt = ChatPromptTemplate.fromMessages([
           [
             "system", // System message defines the AI's role and behavior
             `You are a helpful E-commerce Chatbot Agent for a furniture store. 
 
-IMPORTANT: You have access to an item_lookup tool that searches the furniture inventory database. 
-ALWAYS use this tool when customers ask about furniture items, even if the tool returns errors or empty results.
+          IMPORTANT: You have access to an item_lookup tool that searches the furniture inventory database. 
+          ALWAYS use this tool when customers ask about furniture items, even if the tool returns errors or empty results.
 
-When using the item_lookup tool:
-- If it returns results, provide helpful details about the furniture items
-- If it returns an error or no results, acknowledge this and offer to help in other ways
-- If the database appears to be empty, let the customer know that inventory might be being updated
+          When using the item_lookup tool:
+          - If it returns results, provide helpful details about the furniture items
+          - If it returns an error or no results, acknowledge this and offer to help in other ways
+          - If the database appears to be empty, let the customer know that inventory might be being updated
 
-Current time: {time}`,
+          Current time: {time}`,
           ],
           new MessagesPlaceholder("messages"), // Placeholder for conversation history
         ]);
 
-        // Fill in the prompt template with actual values
         const formattedPrompt = await prompt.formatMessages({
-          time: new Date().toISOString(), // Current timestamp
-          messages: state.messages, // All previous messages
+          time: new Date().toISOString(), 
+          messages: state.messages, 
         });
 
-        // Call the AI model with the formatted prompt
         const result = await model.invoke(formattedPrompt);
-        // Return new state with the AI's response added
         return { messages: [result] };
       });
     }
 
     // Build the workflow graph
     const workflow = new StateGraph(GraphState)
-      .addNode("agent", callModel) // Add AI model node
-      .addNode("tools", toolNode) // Add tool execution node
-      .addEdge("__start__", "agent") // Start workflow at agent
-      .addConditionalEdges("agent", shouldContinue) // Agent decides: tools or end
-      .addEdge("tools", "agent"); // After tools, go back to agent
+      .addNode("agent", callModel) 
+      .addNode("tools", toolNode)
+      .addEdge("__start__", "agent") 
+      .addConditionalEdges("agent", shouldContinue) 
+      .addEdge("tools", "agent"); 
 
-    // Initialize conversation state persistence
+
     const checkpointer = new MongoDBSaver({ client, dbName });
-    // Compile the workflow with state saving
     const app = workflow.compile({ checkpointer });
 
-    // Execute the workflow
+
     const finalState = await app.invoke(
       {
-        messages: [new HumanMessage(query)], // Start with user's question
+        messages: [new HumanMessage(query)], 
       },
       {
-        recursionLimit: 15, // Prevent infinite loops
-        configurable: { thread_id: thread_id }, // Conversation thread identifier
+        recursionLimit: 15, 
+        configurable: { thread_id: thread_id }, 
       }
     );
 
-    // Extract the final response from the conversation
     const response =
       finalState.messages[finalState.messages.length - 1].content;
     console.log("Agent response:", response);
 
-    return response; // Return the AI's final response
+    return response; 
   } catch (error: any) {
-    // Handle different types of errors with user-friendly messages
     console.error("Error in callAgent:", error.message);
 
     if (error.status === 429) {
