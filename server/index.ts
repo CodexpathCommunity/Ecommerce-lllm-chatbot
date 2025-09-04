@@ -19,6 +19,38 @@ async function startServer() {
     await client.db("admin").command({ ping: 1 });
     console.log("You successfully connected to MongoDB!");
 
+    // Route to fetch all products
+    app.get("/products", async (req: Request, res: Response) => {
+      try {
+        const db = client.db("inventory_database");
+        const products = await db.collection("items").find().toArray();
+        res.json(products);
+      } catch (error) {
+        console.error("Error fetching products:", error);
+        res.status(500).json({ error: "Failed to fetch products" });
+      }
+    });
+
+    // Route to fetch a product by ID
+    app.get("/products/:id", async (req: Request, res: Response) => {
+      try {
+        const productId = req.params.id;
+        const db = client.db("inventory_database");
+        const product = await db
+          .collection("items")
+          .findOne({ _id: new ObjectId(productId) }); // Use ObjectId to parse the ID
+
+        if (!product) {
+          return res.status(404).json({ error: "Product not found" });
+        }
+
+        res.json(product);
+      } catch (error) {
+        console.error("Error fetching product:", error);
+        res.status(500).json({ error: "Failed to fetch product" });
+      }
+    });
+
     app.get("/", (req: Request, res: Response) => {
       res.send("LangGraph Agent Server");
     });
@@ -37,7 +69,6 @@ async function startServer() {
     });
 
     app.post("/chat/:threadId", async (req: Request, res: Response) => {
-   
       const { threadId } = req.params;
       const { message } = req.body;
       try {
@@ -50,11 +81,10 @@ async function startServer() {
     });
 
     const PORT = process.env.PORT || 8000;
-    
+
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
-
   } catch (error) {
     console.error("Error connecting to MongoDB:", error);
     process.exit(1);

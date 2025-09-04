@@ -1,6 +1,7 @@
 
 import { FaSearch, FaShoppingCart, FaUser, FaHeart } from "react-icons/fa";
 import ChatWidget from "./ChatWidget";
+import ItemList from "./ItemList";
 
 const EcommerceStore = () => {
   return (
@@ -75,6 +76,7 @@ const EcommerceStore = () => {
             <button>Shop Now</button>
           </div>
         </div>
+        <ItemList />
       </main>
 
       {/* Website footer section */}
